@@ -1,0 +1,160 @@
+{
+  "entities": {
+    "Order": {
+      "title": "Order",
+      "description": "Pesanan kaos Nervis Club Drop 01 dari pembeli.",
+      "type": "object",
+      "properties": {
+        "orderCode": {
+          "type": "string",
+          "description": "Kode referensi pesanan (mis. #NC-2026-1042).",
+          "minLength": 5,
+          "maxLength": 24,
+          "pattern": "^#NC-2026-[0-9]{4}$"
+        },
+        "customerName": {
+          "type": "string",
+          "description": "Nama lengkap pembeli.",
+          "minLength": 2,
+          "maxLength": 80
+        },
+        "whatsapp": {
+          "type": "string",
+          "description": "Nomor WhatsApp aktif pembeli.",
+          "minLength": 9,
+          "maxLength": 20,
+          "pattern": "^[0-9+\\s-]{9,20}$"
+        },
+        "address": {
+          "type": "string",
+          "description": "Alamat lengkap pengiriman.",
+          "minLength": 8,
+          "maxLength": 240
+        },
+        "region": {
+          "type": "string",
+          "description": "Wilayah pengiriman untuk estimasi durasi.",
+          "enum": ["jabodetabek_jabar", "jawa_tengah_timur", "luar_jawa"]
+        },
+        "paymentMethod": {
+          "type": "string",
+          "description": "Metode pembayaran yang dipilih.",
+          "enum": ["QRIS", "Transfer Bank", "COD"]
+        },
+        "size": {
+          "type": "string",
+          "description": "Ukuran kaos yang dipesan.",
+          "enum": ["M", "L", "XL"]
+        },
+        "qty": {
+          "type": "integer",
+          "description": "Jumlah unit pesanan (1 sampai 10)."
+        },
+        "unitPrice": {
+          "type": "integer",
+          "description": "Harga satuan rilis perdana (249000)."
+        },
+        "totalPrice": {
+          "type": "integer",
+          "description": "Total harga pesanan (qty * unitPrice)."
+        },
+        "status": {
+          "type": "string",
+          "description": "Status pemrosesan pesanan oleh admin.",
+          "enum": ["baru", "diproses", "dikirim", "selesai", "dibatalkan"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu server saat pesanan dibuat."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu server saat status pesanan terakhir diperbarui."
+        }
+      },
+      "required": [
+        "orderCode",
+        "customerName",
+        "whatsapp",
+        "address",
+        "region",
+        "paymentMethod",
+        "size",
+        "qty",
+        "unitPrice",
+        "totalPrice",
+        "status",
+        "createdAt"
+      ]
+    },
+    "Inventory": {
+      "title": "Inventory",
+      "description": "Sisa stok real-time per ukuran untuk Drop 01 Nervis Club.",
+      "type": "object",
+      "properties": {
+        "stockM": {
+          "type": "integer",
+          "description": "Sisa stok ukuran M."
+        },
+        "stockL": {
+          "type": "integer",
+          "description": "Sisa stok ukuran L."
+        },
+        "stockXL": {
+          "type": "integer",
+          "description": "Sisa stok ukuran XL."
+        },
+        "unitPrice": {
+          "type": "integer",
+          "description": "Harga rilis per unit."
+        },
+        "lastOrderId": {
+          "type": "string",
+          "description": "ID pesanan terakhir untuk verifikasi atomik.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu server pembaruan stok terakhir."
+        }
+      },
+      "required": ["stockM", "stockL", "stockXL", "unitPrice", "updatedAt"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Daftar UID admin toko Nervis Club.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 120
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["email", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Koleksi pesanan pelanggan Nervis Club. Hanya admin yang dapat membaca, memperbarui status, atau menghapus pesanan."
+    },
+    "/inventory/{inventoryId}": {
+      "schema": { "$ref": "#/entities/Inventory" },
+      "description": "Dokumen stok publik per ukuran (mis. drop01). Dapat dibaca publik dan diperbarui oleh admin atau transaksi checkout atomik."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Daftar administrator terotorisasi."
+    }
+  }
+}

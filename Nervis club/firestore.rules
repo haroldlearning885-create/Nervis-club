@@ -1,0 +1,166 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Hardened Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        request.auth.token.email == 'haroldlearning885@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // --- Validation Blueprints ---
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+        'orderCode', 'customerName', 'whatsapp', 'address',
+        'region', 'paymentMethod', 'size', 'qty',
+        'unitPrice', 'totalPrice', 'status', 'createdAt'
+      ]) &&
+      data.keys().hasOnly([
+        'orderCode', 'customerName', 'whatsapp', 'address',
+        'region', 'paymentMethod', 'size', 'qty',
+        'unitPrice', 'totalPrice', 'status', 'createdAt', 'updatedAt'
+      ]) &&
+      data.orderCode is string && data.orderCode.size() >= 5 && data.orderCode.size() <= 24 &&
+      data.orderCode.matches('^#NC-2026-[0-9]{4}$') &&
+      data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 80 &&
+      data.whatsapp is string && data.whatsapp.size() >= 9 && data.whatsapp.size() <= 20 &&
+      data.whatsapp.matches('^[0-9+\\s-]{9,20}$') &&
+      data.address is string && data.address.size() >= 8 && data.address.size() <= 240 &&
+      data.region is string && data.region in ['jabodetabek_jabar', 'jawa_tengah_timur', 'luar_jawa'] &&
+      data.paymentMethod is string && data.paymentMethod in ['QRIS', 'Transfer Bank', 'COD'] &&
+      data.size is string && data.size in ['M', 'L', 'XL'] &&
+      data.qty is int && data.qty >= 1 && data.qty <= 10 &&
+      data.unitPrice is int && data.unitPrice == 249000 &&
+      data.totalPrice is int && data.totalPrice == data.qty * 249000 &&
+      data.status is string && data.status in ['baru', 'diproses', 'dikirim', 'selesai', 'dibatalkan'] &&
+      data.createdAt is timestamp;
+    }
+
+    function isValidInventory(data) {
+      return data.keys().hasAll(['stockM', 'stockL', 'stockXL', 'unitPrice', 'updatedAt']) &&
+      data.keys().hasOnly(['stockM', 'stockL', 'stockXL', 'unitPrice', 'lastOrderId', 'updatedAt']) &&
+      data.stockM is int && data.stockM >= 0 && data.stockM <= 500 &&
+      data.stockL is int && data.stockL >= 0 && data.stockL <= 500 &&
+      data.stockXL is int && data.stockXL >= 0 && data.stockXL <= 500 &&
+      data.unitPrice is int && data.unitPrice == 249000 &&
+      data.updatedAt is timestamp &&
+      (!('lastOrderId' in data) || isValidId(data.lastOrderId));
+    }
+
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['email', 'createdAt']) &&
+      data.keys().hasOnly(['email', 'createdAt']) &&
+      data.email is string && data.email.size() >= 5 && data.email.size() <= 120 &&
+      data.createdAt is timestamp;
+    }
+
+    function isAtomicOrderStockDecrement() {
+      return incoming().diff(existing()).affectedKeys().hasOnly(['stockM', 'stockL', 'stockXL', 'lastOrderId', 'updatedAt']) &&
+      'lastOrderId' in incoming() &&
+      isValidId(incoming().lastOrderId) &&
+      (!('lastOrderId' in existing()) || incoming().lastOrderId != existing().lastOrderId) &&
+      incoming().updatedAt == request.time &&
+      existsAfter(/databases/$(database)/documents/orders/$(incoming().lastOrderId)) &&
+      (
+        (
+          getAfter(/databases/$(database)/documents/orders/$(incoming().lastOrderId)).data.size == 'M' &&
+          incoming().stockM == existing().stockM - getAfter(/databases/$(database)/documents/orders/$(incoming().lastOrderId)).data.qty &&
+          incoming().stockL == existing().stockL &&
+          incoming().stockXL == existing().stockXL
+        ) ||
+        (
+          getAfter(/databases/$(database)/documents/orders/$(incoming().lastOrderId)).data.size == 'L' &&
+          incoming().stockL == existing().stockL - getAfter(/databases/$(database)/documents/orders/$(incoming().lastOrderId)).data.qty &&
+          incoming().stockM == existing().stockM &&
+          incoming().stockXL == existing().stockXL
+        ) ||
+        (
+          getAfter(/databases/$(database)/documents/orders/$(incoming().lastOrderId)).data.size == 'XL' &&
+          incoming().stockXL == existing().stockXL - getAfter(/databases/$(database)/documents/orders/$(incoming().lastOrderId)).data.qty &&
+          incoming().stockM == existing().stockM &&
+          incoming().stockL == existing().stockL
+        )
+      );
+    }
+
+    // --- Collection Rules ---
+
+    // 1. Orders (PII: hanya Admin bisa membaca/mengelola; pembeli publik hanya bisa create tervalidasi)
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(orderId) &&
+        isValidOrder(incoming()) &&
+        incoming().status == 'baru' &&
+        incoming().createdAt == request.time &&
+        !('updatedAt' in incoming());
+      allow update: if isValidId(orderId) &&
+        isAdmin() &&
+        isValidOrder(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().orderCode == existing().orderCode &&
+        incoming().qty == existing().qty &&
+        incoming().unitPrice == existing().unitPrice &&
+        incoming().totalPrice == existing().totalPrice &&
+        incoming().size == existing().size &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    // 2. Inventory (Stok publik per ukuran, diperbarui oleh Admin atau batch atomik dengan Order)
+    match /inventory/{inventoryId} {
+      allow get: if isValidId(inventoryId);
+      allow list: if false;
+      allow create: if isValidId(inventoryId) &&
+        isValidInventory(incoming()) &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || (inventoryId == 'drop01' && incoming().stockM == 50 && incoming().stockL == 50 && incoming().stockXL == 50));
+      allow update: if isValidId(inventoryId) &&
+        isValidInventory(incoming()) &&
+        incoming().updatedAt == request.time &&
+        (isAdmin() || (inventoryId == 'drop01' && isAtomicOrderStockDecrement()));
+      allow delete: if isValidId(inventoryId) && isAdmin();
+    }
+
+    // 3. Admins (Daftar admin terotorisasi)
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isAdmin() || (isVerified() && request.auth.uid == adminId));
+      allow list: if isAdmin();
+      allow create, update: if isValidId(adminId) && isAdmin() && isValidAdminUser(incoming());
+      allow delete: if isValidId(adminId) && isAdmin();
+    }
+
+    // 4. Connection check
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow list, write: if false;
+    }
+  }
+}
